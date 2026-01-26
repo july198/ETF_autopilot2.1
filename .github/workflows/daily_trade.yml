@@ -2,7 +2,7 @@ name: ETF Auto Trader
 
 on:
   schedule:
-    - cron: "0 1 * * 2-6"  # 每周二到周六北京时间 09:00 执行（UTC 01:00）
+    - cron: "0 1 * * 2-6"  # UTC 01:00，转换为北京时间 09:00
 
 jobs:
   run_daily:
