@@ -1,20 +1,21 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 import pandas as pd
 import yfinance as yf
 
 
+def _today() -> pd.Timestamp:
+    return pd.Timestamp.today().normalize()
+
+
 def _coerce_asof_date(x: Any) -> pd.Timestamp:
     """
-    把 asof_date 统一成“无时区”的日期（00:00:00），并做合理范围校验。
-    遇到 None / 空字符串 / auto / today / 暂定 / 解析失败 -> 直接用今天。
+    asof_date 统一成“无时区”的日期（00:00:00）。
+    遇到 None/空/auto/today/暂定/解析失败 -> 今天
+    遇到非常离谱的年份（<1990 或 >明年）-> 今天
     """
-    def _today() -> pd.Timestamp:
-        return pd.Timestamp.today().normalize()
-
     if x is None:
         return _today()
 
@@ -35,15 +36,14 @@ def _coerce_asof_date(x: Any) -> pd.Timestamp:
             except Exception:
                 return _today()
 
-    # 去时区 + 归一化到日期
+    # 去时区
     if ts.tzinfo is not None:
         ts = ts.tz_convert(None)
+
     ts = ts.normalize()
 
-    # 合理范围：避免 1970、0001 之类的怪日期导致 yfinance 抽风
-    # 年份太小或太大，直接回退到今天
     y = ts.year
-    if y < 1990 or y > pd.Timestamp.today().year + 1:
+    if y < 1990 or y > (pd.Timestamp.today().year + 1):
         return _today()
 
     return ts
@@ -64,7 +64,6 @@ def _coerce_start_date(start: Any, asof: pd.Timestamp, lookback_days: int = 450)
     except Exception:
         return (asof - pd.Timedelta(days=lookback_days)).normalize()
 
-    # start 也做合理范围约束
     if ts.year < 1990 or ts > asof:
         return (asof - pd.Timedelta(days=lookback_days)).normalize()
 
@@ -73,22 +72,17 @@ def _coerce_start_date(start: Any, asof: pd.Timestamp, lookback_days: int = 450)
 
 def _download_yf(symbol: str, start: Any, asof_date: Any) -> pd.DataFrame:
     """
-    统一日期、下载日线 OHLCV。
-    先用 start/end 精确下载；如果拿不到数据，再用 period='2y' 兜底。
+    先用 start/end 下载；如果为空，再用 period='2y' 兜底。
+    返回的 index 统一成“无时区日期”。
     """
     asof = _coerce_asof_date(asof_date)
     start_ts = _coerce_start_date(start, asof, lookback_days=450)
-
-    # yfinance 的 end 是“开区间”，用 asof+1 天确保包含 asof 当天
-    end_ts = (asof + pd.Timedelta(days=1)).normalize()
-
-    start_s = start_ts.strftime("%Y-%m-%d")
-    end_s = end_ts.strftime("%Y-%m-%d")
+    end_ts = (asof + pd.Timedelta(days=1)).normalize()  # end 开区间
 
     df = yf.download(
         symbol,
-        start=start_s,
-        end=end_s,
+        start=start_ts.strftime("%Y-%m-%d"),
+        end=end_ts.strftime("%Y-%m-%d"),
         interval="1d",
         progress=False,
         auto_adjust=False,
@@ -96,18 +90,16 @@ def _download_yf(symbol: str, start: Any, asof_date: Any) -> pd.DataFrame:
         threads=False,
     )
 
-    # 兜底：有时 start/end 下载为空，但用 period 能取到
     if df is None or df.empty:
-        t = yf.Ticker(symbol)
-        df = t.history(period="2y", interval="1d", auto_adjust=False)
+        df = yf.Ticker(symbol).history(period="2y", interval="1d", auto_adjust=False)
 
     if df is None or df.empty:
         raise RuntimeError(f"yfinance 没找到数据：{symbol}")
 
-    # 统一列名（有些返回小写/混合）
+    # 统一列名
     df.columns = [str(c).strip().title() for c in df.columns]
 
-    # 统一索引为日期（无时区）
+    # 统一索引为无时区日期
     if isinstance(df.index, pd.DatetimeIndex):
         idx = df.index
         if idx.tz is not None:
@@ -117,42 +109,35 @@ def _download_yf(symbol: str, start: Any, asof_date: Any) -> pd.DataFrame:
     return df
 
 
-# ---- 下面这些接口名，尽量保持和你原项目一致 ----
+# ===== 对外 API：必须兼容 runner.py 的调用方式 =====
 
-def fetch_signal_inputs(signal_symbol: str, start: Any, asof_date: Any) -> pd.DataFrame:
+def fetch_signal_inputs(signal_symbol: str, start: Any = None, asof_date: Any = None) -> pd.DataFrame:
     """
-    给策略计算用的信号数据（通常是 RSP 的历史日线）。
+    runner.py 以位置参数调用：fetch_signal_inputs(symbol, start, asof_date)
     """
     return _download_yf(signal_symbol, start=start, asof_date=asof_date)
 
 
-def fetch_price_history(symbol: str, start: Any, asof_date: Any) -> pd.DataFrame:
+def fetch_prices(symbol: str, start: Any = None, asof_date: Any = None) -> pd.DataFrame:
     """
-    通用价格历史数据（给其他 ETF 用也行）。
+    runner.py 以位置参数调用：fetch_prices(symbol, start, asof_date)
     """
     return _download_yf(symbol, start=start, asof_date=asof_date)
 
 
 def fetch_fx_usdcny(asof_date: Any = None) -> float:
     """
-    拉 USD/CNY（优先用 yfinance：USDCNY=X，其次 CNY=X）
-    返回：1 USD 兑多少 CNY（float）
+    返回：1 USD 兑多少 CNY
     """
     asof = _coerce_asof_date(asof_date)
-    # 用近 10 天，避免时区/交易日造成空
     start = asof - pd.Timedelta(days=10)
 
     for sym in ("USDCNY=X", "CNY=X"):
         try:
             df = _download_yf(sym, start=start, asof_date=asof)
             if "Close" in df.columns and not df["Close"].dropna().empty:
-                v = float(df["Close"].dropna().iloc[-1])
-                # CNY=X 往往表示 1 USD = ? CNY；如果你发现方向反了，再调整即可
-                return v
+                return float(df["Close"].dropna().iloc[-1])
         except Exception:
             continue
 
     raise RuntimeError("yfinance 没找到 USD/CNY 汇率数据（USDCNY=X / CNY=X）")
-# 兼容旧代码：runner.py 里导入的是 fetch_prices
-def fetch_prices(symbol: str, start: Any, asof_date: Any) -> pd.DataFrame:
-    return fetch_price_history(symbol=symbol, start=start, asof_date=asof_date)
