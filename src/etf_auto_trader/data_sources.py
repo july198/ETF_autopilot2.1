@@ -72,7 +72,6 @@ def _coerce_asof_date(x: Any) -> pd.Timestamp:
             except Exception:
                 return _today()
 
-    # 去时区
     if ts.tzinfo is not None:
         ts = ts.tz_convert(None)
 
@@ -106,26 +105,53 @@ def _coerce_start_date(start: Any, asof: pd.Timestamp, lookback_days: int = 450)
     return ts
 
 
-def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+def _normalize_columns(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
     """
     把 yfinance 返回的列名尽量统一为：
     Open / High / Low / Close / Adj Close / Volume
-    （如果本来就是这套就不动）
+    并剥掉类似 “Close Rsp / Adj Close Rsp” 的 ticker 后缀。
     """
-    # 有时会出现多层列（少见），简单处理一下
+    sym = str(symbol).strip()
+    sym_upper = sym.upper()
+    sym_title = sym.title()
+
+    # 处理 MultiIndex（有时会出现）
     if isinstance(df.columns, pd.MultiIndex):
-        df.columns = [" ".join([str(x) for x in col if str(x) != ""]).strip() for col in df.columns]
+        # 常见形态：(Field, Ticker) 或 (Ticker, Field)
+        flattened = []
+        for col in df.columns:
+            parts = [str(x).strip() for x in col if str(x).strip() != ""]
+            flattened.append(" ".join(parts).strip())
+        df.columns = flattened
 
-    # title 化
-    df.columns = [str(c).strip().title() for c in df.columns]
+    # 统一成 Title Case
+    cols = [str(c).strip() for c in df.columns]
+    cols = [c.title() for c in cols]
 
-    # 一些常见变体归一化
-    rename_map = {
-        "Adjclose": "Adj Close",
-        "Adj_close": "Adj Close",
-        "Adj. Close": "Adj Close",
-    }
-    df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
+    # 修正常见 Adj Close 变体
+    def fix_adj(c: str) -> str:
+        return (
+            c.replace("Adjclose", "Adj Close")
+             .replace("Adj_close", "Adj Close")
+             .replace("Adj. Close", "Adj Close")
+        )
+
+    cols = [fix_adj(c) for c in cols]
+
+    # 剥掉 ticker 后缀：例如 "Close Rsp" -> "Close"
+    stripped = []
+    for c in cols:
+        c_strip = c.strip()
+
+        # 结尾如果是 " <Symbol>" 就去掉
+        for suf in (f" {sym_title}", f" {sym_upper}", f" {sym}"):
+            if c_strip.endswith(suf):
+                c_strip = c_strip[: -len(suf)].strip()
+                break
+
+        stripped.append(c_strip)
+
+    df.columns = stripped
     return df
 
 
@@ -155,7 +181,7 @@ def _download_yf(symbol: str, start: Any, asof_date: Any) -> pd.DataFrame:
     if df is None or df.empty:
         raise RuntimeError(f"yfinance 没找到数据：{symbol}")
 
-    df = _normalize_columns(df)
+    df = _normalize_columns(df, symbol=symbol)
 
     # 统一索引为无时区日期
     if isinstance(df.index, pd.DatetimeIndex):
@@ -195,7 +221,6 @@ def fetch_fx_usdcny(asof_date: Any = None) -> float:
     for sym in ("USDCNY=X", "CNY=X"):
         try:
             df = _download_yf(sym, start=start, asof_date=asof)
-            # 汇率一般用 Close
             if "Close" in df.columns and not df["Close"].dropna().empty:
                 return float(df["Close"].dropna().iloc[-1])
         except Exception:
