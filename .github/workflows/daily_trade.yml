@@ -28,4 +28,4 @@ jobs:
       # 步骤 4: 运行交易脚本
       - name: Run daily trader script
         run: |
-          python scripts/run_daily.py  # 确保路径指向正确的脚本文件
+          python ./scripts/run_daily.py  # 修改为相对路径
