@@ -42,19 +42,20 @@ jobs:
         run: |
           python ./scripts/run_daily.py
 
-      - name: Send email fallback via QQ SMTP
+      - name: Send email fallback via QQ SMTP (465/587 retry)
         run: |
           python - <<'PY'
-          import os, glob, json, ssl, smtplib
+          import os, glob, json, ssl, smtplib, time
           from email.mime.text import MIMEText
 
-          user = os.getenv("SMTP_USER","")
-          pwd  = os.getenv("SMTP_PASS","")
-          to   = os.getenv("SMTP_TO","")
+          user = os.getenv("SMTP_USER","").strip()
+          pwd  = os.getenv("SMTP_PASS","").strip()
+          to   = os.getenv("SMTP_TO","").strip()
 
           if not user or not pwd or not to:
               raise SystemExit("SMTP env missing: check secrets mapping")
 
+          # 读取最新 summary
           summary = ""
           candidates = sorted(
               glob.glob("data/summary_*.json") + glob.glob("**/data/summary_*.json", recursive=True),
@@ -77,10 +78,49 @@ jobs:
           msg["From"] = user
           msg["To"] = to
 
+          host = "smtp.qq.com"
           ctx = ssl.create_default_context()
-          with smtplib.SMTP_SSL("smtp.qq.com", 465, context=ctx, timeout=30) as s:
-              s.login(user, pwd)
-              s.sendmail(user, [to], msg.as_string())
 
-          print("Fallback email sent.")
+          def send_via_465():
+              with smtplib.SMTP_SSL(host, 465, context=ctx, timeout=30) as s:
+                  s.ehlo()
+                  s.login(user, pwd)
+                  s.sendmail(user, [to], msg.as_string())
+
+          def send_via_587():
+              with smtplib.SMTP(host, 587, timeout=30) as s:
+                  s.ehlo()
+                  s.starttls(context=ctx)
+                  s.ehlo()
+                  s.login(user, pwd)
+                  s.sendmail(user, [to], msg.as_string())
+
+          last_err = None
+          for attempt in range(1, 4):
+              try:
+                  # 第一次优先 465，失败再试 587
+                  try:
+                      send_via_465()
+                      print("Email sent via 465 SSL.")
+                      raise SystemExit(0)
+                  except Exception as e1:
+                      print(f"[Attempt {attempt}] 465 failed: {type(e1).__name__}: {e1}")
+                      last_err = e1
+
+                  try:
+                      send_via_587()
+                      print("Email sent via 587 STARTTLS.")
+                      raise SystemExit(0)
+                  except Exception as e2:
+                      print(f"[Attempt {attempt}] 587 failed: {type(e2).__name__}: {e2}")
+                      last_err = e2
+
+              except SystemExit:
+                  raise
+              except Exception as e:
+                  last_err = e
+
+              time.sleep(5 * attempt)
+
+          raise RuntimeError(f"SMTP send failed after retries: {type(last_err).__name__}: {last_err}")
           PY
