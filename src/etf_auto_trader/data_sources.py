@@ -9,52 +9,56 @@ import yfinance as yf
 class MarketData:
     """
     兼容旧代码：允许用 md.close / md.open / md.high / md.low / md.volume
-    同时兼容英文列名与中文列名。
+    兼容列名：Close/Adj Close/Open/High/Low/Volume 及一些中文列名
+    兼容 runner.py 里可能出现的：md.prev_close、md.MA200 / md.ma200
     """
+
     def __init__(self, df: pd.DataFrame):
         self.df = df
 
-    def _pick_col(self, *candidates: str):
+    def _pick_col(self, *candidates: str) -> pd.Series:
         for c in candidates:
             if c in self.df.columns:
                 return self.df[c]
         raise KeyError(f"找不到列：{candidates}，当前列名={list(self.df.columns)}")
 
     @property
-    def close(self):
+    def close(self) -> pd.Series:
         # 英文优先，其次兼容常见中文
         return self._pick_col("Close", "Adj Close", "收盘", "关闭", "接近")
 
     @property
-    def open(self):
+    def open(self) -> pd.Series:
         return self._pick_col("Open", "开盘", "打开")
 
     @property
-    def high(self):
+    def high(self) -> pd.Series:
         return self._pick_col("High", "最高", "高")
 
     @property
-    def low(self):
+    def low(self) -> pd.Series:
         return self._pick_col("Low", "最低", "低")
 
     @property
-    def volume(self):
+    def volume(self) -> pd.Series:
         return self._pick_col("Volume", "成交量", "量")
 
     @property
-    def prev_close(self):
-        """
-        返回前一个交易日的收盘价
-        """
-        return self.df["Close"].shift(1)
+    def prev_close(self) -> pd.Series:
+        # 前一交易日收盘
+        return self.close.shift(1)
 
-       @property
-    def MA200(self):
-        """
-        计算并返回200日移动平均线
-        """
-        return self.df["Close"].rolling(window=200).mean()
-        
+    @property
+    def MA200(self) -> pd.Series:
+        # 200 日均线（按 Close 计算）
+        return self.close.rolling(window=200, min_periods=200).mean()
+
+    @property
+    def ma200(self) -> pd.Series:
+        # 兼容 runner.py 若使用小写
+        return self.MA200
+
+
 def _today() -> pd.Timestamp:
     return pd.Timestamp.today().normalize()
 
@@ -120,48 +124,43 @@ def _coerce_start_date(start: Any, asof: pd.Timestamp, lookback_days: int = 450)
 
 def _normalize_columns(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
     """
-    把 yfinance 返回的列名尽量统一为：
-    Open / High / Low / Close / Adj Close / Volume
-    并剥掉类似 “Close Rsp” 的 ticker 后缀。
+    统一列名为：Open / High / Low / Close / Adj Close / Volume
+    并剥掉类似 “Close Rsp / Adj Close Rsp” 的 ticker 后缀。
     """
     sym = str(symbol).strip()
     sym_upper = sym.upper()
     sym_title = sym.title()
 
-    # 处理 MultiIndex（有时会出现）
+    # MultiIndex -> 扁平化
     if isinstance(df.columns, pd.MultiIndex):
-        # 常见形态：(Field, Ticker) 或 (Ticker, Field)
         flattened = []
         for col in df.columns:
             parts = [str(x).strip() for x in col if str(x).strip() != ""]
             flattened.append(" ".join(parts).strip())
         df.columns = flattened
 
-    # 统一成 Title Case
+    # Title 化
     cols = [str(c).strip() for c in df.columns]
     cols = [c.title() for c in cols]
 
-    # 修正常见 Adj Close 变体
+    # Adj Close 变体归一化
     def fix_adj(c: str) -> str:
         return (
             c.replace("Adjclose", "Adj Close")
-             .replace("Adj_close", "Adj Close")
-             .replace("Adj. Close", "Adj Close")
+            .replace("Adj_close", "Adj Close")
+            .replace("Adj. Close", "Adj Close")
         )
 
     cols = [fix_adj(c) for c in cols]
 
-    # 剥掉 ticker 后缀：例如 "Close Rsp" -> "Close"
+    # 剥掉 ticker 后缀（例如 "Close Rsp" -> "Close"）
     stripped = []
     for c in cols:
         c_strip = c.strip()
-
-        # 结尾如果是 " <Symbol>" 就去掉
         for suf in (f" {sym_title}", f" {sym_upper}", f" {sym}"):
             if c_strip.endswith(suf):
                 c_strip = c_strip[: -len(suf)].strip()
                 break
-
         stripped.append(c_strip)
 
     df.columns = stripped
@@ -171,7 +170,7 @@ def _normalize_columns(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
 def _download_yf(symbol: str, start: Any, asof_date: Any) -> pd.DataFrame:
     """
     先用 start/end 下载；如果为空，再用 period='2y' 兜底。
-    返回的 index 统一成“无时区日期”。
+    返回 index：无时区日期。
     """
     asof = _coerce_asof_date(asof_date)
     start_ts = _coerce_start_date(start, asof, lookback_days=450)
@@ -209,18 +208,11 @@ def _download_yf(symbol: str, start: Any, asof_date: Any) -> pd.DataFrame:
 # ===== 对外 API：必须兼容 runner.py 的调用方式 =====
 
 def fetch_signal_inputs(signal_symbol: str, start: Any = None, asof_date: Any = None) -> MarketData:
-    """
-    runner.py 以位置参数调用：fetch_signal_inputs(symbol, start, asof_date)
-    返回 MarketData，兼容 md.close 这类用法
-    """
     df = _download_yf(signal_symbol, start=start, asof_date=asof_date)
     return MarketData(df)
 
 
 def fetch_prices(symbol: str, start: Any = None, asof_date: Any = None) -> pd.DataFrame:
-    """
-    runner.py 以位置参数调用：fetch_prices(symbol, start, asof_date)
-    """
     return _download_yf(symbol, start=start, asof_date=asof_date)
 
 
@@ -240,3 +232,4 @@ def fetch_fx_usdcny(asof_date: Any = None) -> float:
             continue
 
     raise RuntimeError("yfinance 没找到 USD/CNY 汇率数据（USDCNY=X / CNY=X）")
+
