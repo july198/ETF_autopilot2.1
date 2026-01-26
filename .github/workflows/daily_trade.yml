@@ -10,10 +10,10 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-  TZ: Asia/Shanghai
-  SMTP_USER: ${{ secrets.SMTP_USER }}
-  SMTP_PASS: ${{ secrets.SMTP_PASSWORD }}
-  SMTP_TO:   ${{ secrets.TO_EMAIL }}
+      TZ: Asia/Shanghai
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_PASS: ${{ secrets.SMTP_PASSWORD }}
+      SMTP_TO: ${{ secrets.TO_EMAIL }}
 
     steps:
       - name: Checkout code
@@ -29,7 +29,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # 只打印长度，不泄露你的密码
       - name: Check email env (length only)
         run: |
           python - <<'PY'
@@ -42,3 +41,46 @@ jobs:
       - name: Run daily trader script
         run: |
           python ./scripts/run_daily.py
+
+      - name: Send email fallback via QQ SMTP
+        run: |
+          python - <<'PY'
+          import os, glob, json, ssl, smtplib
+          from email.mime.text import MIMEText
+
+          user = os.getenv("SMTP_USER","")
+          pwd  = os.getenv("SMTP_PASS","")
+          to   = os.getenv("SMTP_TO","")
+
+          if not user or not pwd or not to:
+              raise SystemExit("SMTP env missing: check secrets mapping")
+
+          summary = ""
+          candidates = sorted(
+              glob.glob("data/summary_*.json") + glob.glob("**/data/summary_*.json", recursive=True),
+              key=lambda p: os.path.getmtime(p),
+              reverse=True
+          )
+          if candidates:
+              p = candidates[0]
+              try:
+                  with open(p, "r", encoding="utf-8") as f:
+                      summary_json = json.load(f)
+                  summary = json.dumps(summary_json, ensure_ascii=False, indent=2)
+              except Exception as e:
+                  summary = f"Found {p} but failed to read: {e}"
+          else:
+              summary = "No summary file found. This is a SMTP test mail."
+
+          msg = MIMEText("=== Summary ===\n" + summary + "\n", "plain", "utf-8")
+          msg["Subject"] = "ETF Auto Trader Report (GitHub Actions)"
+          msg["From"] = user
+          msg["To"] = to
+
+          ctx = ssl.create_default_context()
+          with smtplib.SMTP_SSL("smtp.qq.com", 465, context=ctx, timeout=30) as s:
+              s.login(user, pwd)
+              s.sendmail(user, [to], msg.as_string())
+
+          print("Fallback email sent.")
+          PY
