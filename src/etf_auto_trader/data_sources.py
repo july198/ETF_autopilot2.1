@@ -48,6 +48,13 @@ class MarketData:
         """
         return self.df["Close"].shift(1)
 
+    @property
+    def MA200(self):
+        """
+        计算并返回200日移动平均线
+        """
+        return self.df["Close"].rolling(window=200).mean()
+
 
 def _today() -> pd.Timestamp:
     return pd.Timestamp.today().normalize()
@@ -234,4 +241,3 @@ def fetch_fx_usdcny(asof_date: Any = None) -> float:
             continue
 
     raise RuntimeError("yfinance 没找到 USD/CNY 汇率数据（USDCNY=X / CNY=X）")
-
