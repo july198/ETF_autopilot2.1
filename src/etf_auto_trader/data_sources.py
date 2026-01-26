@@ -9,30 +9,37 @@ import yfinance as yf
 class MarketData:
     """
     兼容旧代码：允许用 md.close / md.open / md.high / md.low / md.volume
-    同时保留原始 DataFrame（md.df）
+    同时兼容英文列名与中文列名。
     """
     def __init__(self, df: pd.DataFrame):
         self.df = df
 
+    def _pick_col(self, *candidates: str):
+        for c in candidates:
+            if c in self.df.columns:
+                return self.df[c]
+        raise KeyError(f"找不到列：{candidates}，当前列名={list(self.df.columns)}")
+
     @property
     def close(self):
-        return self.df["Close"]
+        # 英文优先，其次兼容常见中文
+        return self._pick_col("Close", "Adj Close", "收盘", "关闭", "接近")
 
     @property
     def open(self):
-        return self.df["Open"] if "Open" in self.df.columns else None
+        return self._pick_col("Open", "开盘", "打开")
 
     @property
     def high(self):
-        return self.df["High"] if "High" in self.df.columns else None
+        return self._pick_col("High", "最高", "高")
 
     @property
     def low(self):
-        return self.df["Low"] if "Low" in self.df.columns else None
+        return self._pick_col("Low", "最低", "低")
 
     @property
     def volume(self):
-        return self.df["Volume"] if "Volume" in self.df.columns else None
+        return self._pick_col("Volume", "成交量", "量")
 
 
 def _today() -> pd.Timestamp:
@@ -99,6 +106,29 @@ def _coerce_start_date(start: Any, asof: pd.Timestamp, lookback_days: int = 450)
     return ts
 
 
+def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    把 yfinance 返回的列名尽量统一为：
+    Open / High / Low / Close / Adj Close / Volume
+    （如果本来就是这套就不动）
+    """
+    # 有时会出现多层列（少见），简单处理一下
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [" ".join([str(x) for x in col if str(x) != ""]).strip() for col in df.columns]
+
+    # title 化
+    df.columns = [str(c).strip().title() for c in df.columns]
+
+    # 一些常见变体归一化
+    rename_map = {
+        "Adjclose": "Adj Close",
+        "Adj_close": "Adj Close",
+        "Adj. Close": "Adj Close",
+    }
+    df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
+    return df
+
+
 def _download_yf(symbol: str, start: Any, asof_date: Any) -> pd.DataFrame:
     """
     先用 start/end 下载；如果为空，再用 period='2y' 兜底。
@@ -125,8 +155,7 @@ def _download_yf(symbol: str, start: Any, asof_date: Any) -> pd.DataFrame:
     if df is None or df.empty:
         raise RuntimeError(f"yfinance 没找到数据：{symbol}")
 
-    # 统一列名
-    df.columns = [str(c).strip().title() for c in df.columns]
+    df = _normalize_columns(df)
 
     # 统一索引为无时区日期
     if isinstance(df.index, pd.DatetimeIndex):
@@ -166,6 +195,7 @@ def fetch_fx_usdcny(asof_date: Any = None) -> float:
     for sym in ("USDCNY=X", "CNY=X"):
         try:
             df = _download_yf(sym, start=start, asof_date=asof)
+            # 汇率一般用 Close
             if "Close" in df.columns and not df["Close"].dropna().empty:
                 return float(df["Close"].dropna().iloc[-1])
         except Exception:
