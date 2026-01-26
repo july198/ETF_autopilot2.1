@@ -1,52 +1,74 @@
 from __future__ import annotations
 
-import datetime as dt
 from dataclasses import dataclass
-from typing import Optional
+from datetime import date, datetime
+from typing import Any
 
-import exchange_calendars as xcals
 import pandas as pd
+import exchange_calendars as ecals
+from exchange_calendars.errors import DateOutOfBounds
 
 
-@dataclass(frozen=True)
-class TradingCalendar:
-    name: str = "XNYS"  # NYSE
+def _to_session_ts(x: Any, tz: str = "America/New_York") -> pd.Timestamp:
+    """
+    把各种输入（None/空字符串/“暂定”/日期字符串/date/datetime/Timestamp）
+    统一转换成交易日历可识别的 Timestamp。
+    遇到无效值时，自动回退为“今天（纽约时区）0点”。
+    """
+    # 兜底：今天
+    def _today() -> pd.Timestamp:
+        return pd.Timestamp.now(tz=tz).normalize()
 
-    def __post_init__(self):
-        # nothing
-        pass
+    if x is None:
+        return _today()
 
-    @property
-    def cal(self):
-        return xcals.get_calendar(self.name)
+    # pandas Timestamp
+    if isinstance(x, pd.Timestamp):
+        if x.tzinfo is None:
+            return x.tz_localize(tz).normalize()
+        return x.tz_convert(tz).normalize()
 
-    def is_trading_day(self, d: dt.date) -> bool:
-        # exchange_calendars 提供 is_session，可以直接判断某天是否为交易日
-        return bool(self.cal.is_session(pd.Timestamp(d)))
-    def trading_day_index(self, d: dt.date) -> Optional[int]:
-        # Index trading days by their position since 1970-01-01 (stable)
-        # Non-trading day returns None
-        if not self.is_trading_day(d):
-            return None
-        # Use trading sessions list
-        sessions = self.cal.sessions_in_range("1970-01-01", d.strftime("%Y-%m-%d"))
-        # sessions includes d
-        return int(len(sessions))
+    # datetime
+    if isinstance(x, datetime):
+        ts = pd.Timestamp(x)
+        if ts.tzinfo is None:
+            return ts.tz_localize(tz).normalize()
+        return ts.tz_convert(tz).normalize()
 
-    def trading_days_between(self, d1: dt.date, d2: dt.date) -> int:
-        """Return index(d2)-index(d1). d1 and d2 should be trading days."""
-        i1 = self.trading_day_index(d1)
-        i2 = self.trading_day_index(d2)
-        if i1 is None or i2 is None:
-            raise ValueError("d1 and d2 must be trading days")
-        return i2 - i1
+    # date
+    if isinstance(x, date):
+        return pd.Timestamp(x).tz_localize(tz).normalize()
 
-    def third_friday(self, d: dt.date) -> bool:
-        # Third Friday of the month (calendar), and it must be a trading day
-        year, month = d.year, d.month
-        first = dt.date(year, month, 1)
-        # weekday: Monday=0..Sunday=6, we want Friday=4
-        offset = (4 - first.weekday()) % 7
-        first_friday = first + dt.timedelta(days=offset)
-        third_friday = first_friday + dt.timedelta(days=14)
-        return d == third_friday and self.is_trading_day(d)
+    # str
+    if isinstance(x, str):
+        s = x.strip()
+        # 这些值都当成“自动=今天”
+        if s in ("", "auto", "AUTO", "today", "TODAY", "暂定", "TBD", "tbd"):
+            return _today()
+        try:
+            ts = pd.Timestamp(s)
+            if ts.tzinfo is None:
+                return ts.tz_localize(tz).normalize()
+            return ts.tz_convert(tz).normalize()
+        except Exception:
+            return _today()
+
+    # 其他类型：一律兜底
+    return _today()
+
+
+@dataclass
+class CalendarUtil:
+    cal_name: str = "XNYS"
+    tz: str = "America/New_York"
+
+    def __post_init__(self) -> None:
+        self.cal = ecals.get_calendar(self.cal_name)
+
+    def is_trading_day(self, when: Any = None) -> bool:
+        ts = _to_session_ts(when, tz=self.tz)
+        try:
+            return bool(self.cal.is_session(ts))
+        except DateOutOfBounds:
+            # 日期超出日历库范围时，返回 False，避免脚本直接崩
+            return False
