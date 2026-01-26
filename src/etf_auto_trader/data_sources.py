@@ -6,6 +6,35 @@ import pandas as pd
 import yfinance as yf
 
 
+class MarketData:
+    """
+    兼容旧代码：允许用 md.close / md.open / md.high / md.low / md.volume
+    同时保留原始 DataFrame（md.df）
+    """
+    def __init__(self, df: pd.DataFrame):
+        self.df = df
+
+    @property
+    def close(self):
+        return self.df["Close"]
+
+    @property
+    def open(self):
+        return self.df["Open"] if "Open" in self.df.columns else None
+
+    @property
+    def high(self):
+        return self.df["High"] if "High" in self.df.columns else None
+
+    @property
+    def low(self):
+        return self.df["Low"] if "Low" in self.df.columns else None
+
+    @property
+    def volume(self):
+        return self.df["Volume"] if "Volume" in self.df.columns else None
+
+
 def _today() -> pd.Timestamp:
     return pd.Timestamp.today().normalize()
 
@@ -111,11 +140,13 @@ def _download_yf(symbol: str, start: Any, asof_date: Any) -> pd.DataFrame:
 
 # ===== 对外 API：必须兼容 runner.py 的调用方式 =====
 
-def fetch_signal_inputs(signal_symbol: str, start: Any = None, asof_date: Any = None) -> pd.DataFrame:
+def fetch_signal_inputs(signal_symbol: str, start: Any = None, asof_date: Any = None) -> MarketData:
     """
     runner.py 以位置参数调用：fetch_signal_inputs(symbol, start, asof_date)
+    返回 MarketData，兼容 md.close 这类用法
     """
-    return _download_yf(signal_symbol, start=start, asof_date=asof_date)
+    df = _download_yf(signal_symbol, start=start, asof_date=asof_date)
+    return MarketData(df)
 
 
 def fetch_prices(symbol: str, start: Any = None, asof_date: Any = None) -> pd.DataFrame:
