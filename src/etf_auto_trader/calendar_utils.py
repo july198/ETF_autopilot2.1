@@ -83,6 +83,25 @@ class CalendarUtil:
         tf = _third_friday_of_month(d)
         return bool(d == tf)
 
+    def trading_days_between(self, start: Any, end: Any) -> int:
+        """返回 start 到 end 之间相隔的交易日数量（不含 start，含 end 的位置差）。"""
+        s = _as_naive_day(start)
+        e = _as_naive_day(end)
+        try:
+            # sessions_in_range 返回 DatetimeIndex（无时区）
+            sessions = self.cal.sessions_in_range(s, e)
+            if sessions is None:
+                return 999
+            # 若 start 本身是交易日，sessions 包含 start；我们要“差值”，所以减 1
+            n = int(len(sessions))
+            if n <= 0:
+                return 0
+            if self.is_trading_day(s):
+                return max(0, n - 1)
+            return n
+        except Exception:
+            return 999
+
 
 # 兼容旧代码：runner/strategy 里可能使用 TradingCalendar 这个名字
 TradingCalendar = CalendarUtil

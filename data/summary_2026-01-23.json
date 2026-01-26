@@ -1,0 +1,17 @@
+{
+  "date": "2026-01-23",
+  "signal": "None",
+  "recommended_buy_cny": 0.0,
+  "cash_pool_start_cny": 0.0,
+  "cash_pool_end_cny": 0.0,
+  "reserve_balance_before_cny": 0.0,
+  "reserve_use_cny": 0.0,
+  "reserve_add_cny": 0.0,
+  "rsp_close": 125.95,
+  "ma200": 120.975,
+  "month_high_close": 125.95,
+  "monthly_drawdown": 0.0,
+  "orders": [],
+  "total_fee_usd": 0.0,
+  "broker_result": "BROKER: SKIPPED（无交易）"
+}

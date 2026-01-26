@@ -1,0 +1,64 @@
+app:
+  base_currency: CNY
+  timezone: America/New_York
+symbols:
+  portfolio:
+  - IWY
+  - SPMO
+  - RSP
+  - PFF
+  - VNQ
+  signal: RSP
+params:
+  fx_usd_cny: 6.9633
+  invest_cny_per_trade: 5000
+  first_buy_ratio_below_ma200: 0.5
+  first_daily_drop_threshold: -0.0125
+  second_drawdown_threshold: -0.05
+  third_drawdown_threshold: -0.1
+  cooldown_trading_days: 5
+  max_trades_per_month: 3
+  target_weight_each: 0.2
+  weight_floor_guardrail: 0.15
+  weight_ceiling_guardrail: 0.25
+  fx_mode: fixed
+  fx_symbol: USDCNY=X
+  fx_fallback_usd_cny: 6.9633
+execution:
+  allow_fractional_shares: true
+  fractional_step: 0.0001
+  spread_cost_pct: 0.001
+  other_fixed_fee_usd: 0.0
+cash_pool:
+  enabled: true
+  source: AUTO
+  manual_cny: 0.0
+fees:
+  buy:
+    commission_per_share: 0.0049
+    commission_min_usd: 0.99
+    platform_per_share: 0.005
+    platform_min_usd: 1.0
+    clearing_per_share: 0.003
+  sell_extra:
+    activity_per_share: 0.000166
+    activity_min_usd: 0.01
+    activity_max_usd: 8.3
+    cat_per_share: 2.7e-05
+    sec_fee_usd: 0.0
+broker:
+  mode: paper
+  alpaca:
+    paper: true
+notify:
+  email:
+    enabled: true
+    smtp_host: smtp.qq.com
+    smtp_port: 465
+    smtp_user_env: SMTP_USER
+    smtp_pass_env: SMTP_PASS
+    to_env: SMTP_TO
+bootstrap:
+  initial_invest_cny: 500000
+  cash_buffer_usd: 14800
+  equal_weight: true

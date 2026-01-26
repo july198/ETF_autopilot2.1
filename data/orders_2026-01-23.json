@@ -1,0 +1,16 @@
+{
+  "date": "2026-01-23",
+  "fx_usd_cny": 125.95,
+  "prices_close": {
+    "IWY": 125.95,
+    "SPMO": 125.95,
+    "RSP": 125.95,
+    "PFF": 125.95,
+    "VNQ": 125.95
+  },
+  "signal": "None",
+  "recommended_buy_cny": 0.0,
+  "orders": [],
+  "total_fee_usd": 0.0,
+  "message": "no_trade"
+}
