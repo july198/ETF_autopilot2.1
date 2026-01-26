@@ -6,11 +6,28 @@ import pandas as pd
 import yfinance as yf
 
 
+def _last_valid_value(s: pd.Series) -> float:
+    """
+    取 Series 最后一条非空值，取不到返回 NaN。
+    """
+    if s is None:
+        return float("nan")
+    s2 = s.dropna()
+    if s2.empty:
+        return float("nan")
+    try:
+        return float(s2.iloc[-1])
+    except Exception:
+        return float("nan")
+
+
 class MarketData:
     """
-    兼容旧代码：允许用 md.close / md.open / md.high / md.low / md.volume
-    兼容列名：Close/Adj Close/Open/High/Low/Volume 及一些中文列名
-    兼容 runner.py 里可能出现的：md.prev_close、md.MA200 / md.ma200、md.month_high_close
+    兼容旧代码（runner/strategy）期望的字段是“单个数值”：
+      - md.close / md.prev_close / md.MA200 / md.ma200 / md.month_high_close
+
+    同时提供 *_series 版本以便内部计算：
+      - md.close_series / md.prev_close_series / md.MA200_series
     """
 
     def __init__(self, df: pd.DataFrame):
@@ -22,47 +39,74 @@ class MarketData:
                 return self.df[c]
         raise KeyError(f"找不到列：{candidates}，当前列名={list(self.df.columns)}")
 
+    # ===== Series 版本 =====
+
     @property
-    def close(self) -> pd.Series:
-        # 英文优先，其次兼容常见中文
+    def close_series(self) -> pd.Series:
         return self._pick_col("Close", "Adj Close", "收盘", "关闭", "接近")
 
     @property
-    def open(self) -> pd.Series:
+    def open_series(self) -> pd.Series:
         return self._pick_col("Open", "开盘", "打开")
 
     @property
-    def high(self) -> pd.Series:
+    def high_series(self) -> pd.Series:
         return self._pick_col("High", "最高", "高")
 
     @property
-    def low(self) -> pd.Series:
+    def low_series(self) -> pd.Series:
         return self._pick_col("Low", "最低", "低")
 
     @property
-    def volume(self) -> pd.Series:
+    def volume_series(self) -> pd.Series:
         return self._pick_col("Volume", "成交量", "量")
 
     @property
-    def prev_close(self) -> pd.Series:
-        # 前一交易日收盘
-        return self.close.shift(1)
+    def prev_close_series(self) -> pd.Series:
+        return self.close_series.shift(1)
 
     @property
-    def MA200(self) -> pd.Series:
-        # 200 日均线（按 Close 计算）
-        return self.close.rolling(window=200, min_periods=200).mean()
+    def MA200_series(self) -> pd.Series:
+        return self.close_series.rolling(window=200, min_periods=200).mean()
+
+    # ===== 标量版本（float）=====
 
     @property
-    def ma200(self) -> pd.Series:
-        # 兼容 runner.py 若使用小写
+    def close(self) -> float:
+        return _last_valid_value(self.close_series)
+
+    @property
+    def open(self) -> float:
+        return _last_valid_value(self.open_series)
+
+    @property
+    def high(self) -> float:
+        return _last_valid_value(self.high_series)
+
+    @property
+    def low(self) -> float:
+        return _last_valid_value(self.low_series)
+
+    @property
+    def volume(self) -> float:
+        return _last_valid_value(self.volume_series)
+
+    @property
+    def prev_close(self) -> float:
+        return _last_valid_value(self.prev_close_series)
+
+    @property
+    def MA200(self) -> float:
+        return _last_valid_value(self.MA200_series)
+
+    @property
+    def ma200(self) -> float:
         return self.MA200
 
     @property
     def month_high_close(self) -> float:
         """
-        返回“最近一根K线所在月份”的月内最高收盘价（float）。
-        例：如果最新数据日期是 2026-01-25，则取 2026-01 全月内 Close 的最大值。
+        返回“最新一根K线所在月份”的月内最高收盘价（float）。
         """
         if self.df is None or self.df.empty:
             return float("nan")
@@ -75,17 +119,13 @@ class MarketData:
         if pd.isna(last_dt):
             return float("nan")
 
-        closes = self.close
+        closes = self.close_series
         mask = (idx.year == last_dt.year) & (idx.month == last_dt.month)
         month_closes = closes.loc[mask]
         if month_closes.empty:
             return float("nan")
 
-        v = month_closes.max()
-        try:
-            return float(v)
-        except Exception:
-            return float("nan")
+        return _last_valid_value(month_closes.cummax())
 
 
 def _today() -> pd.Timestamp:
@@ -160,7 +200,6 @@ def _normalize_columns(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
     sym_upper = sym.upper()
     sym_title = sym.title()
 
-    # MultiIndex -> 扁平化
     if isinstance(df.columns, pd.MultiIndex):
         flattened = []
         for col in df.columns:
@@ -168,11 +207,9 @@ def _normalize_columns(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
             flattened.append(" ".join(parts).strip())
         df.columns = flattened
 
-    # Title 化
     cols = [str(c).strip() for c in df.columns]
     cols = [c.title() for c in cols]
 
-    # Adj Close 变体归一化
     def fix_adj(c: str) -> str:
         return (
             c.replace("Adjclose", "Adj Close")
@@ -182,7 +219,6 @@ def _normalize_columns(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
 
     cols = [fix_adj(c) for c in cols]
 
-    # 剥掉 ticker 后缀（例如 "Close Rsp" -> "Close"）
     stripped = []
     for c in cols:
         c_strip = c.strip()
@@ -203,7 +239,7 @@ def _download_yf(symbol: str, start: Any, asof_date: Any) -> pd.DataFrame:
     """
     asof = _coerce_asof_date(asof_date)
     start_ts = _coerce_start_date(start, asof, lookback_days=450)
-    end_ts = (asof + pd.Timedelta(days=1)).normalize()  # end 开区间
+    end_ts = (asof + pd.Timedelta(days=1)).normalize()
 
     df = yf.download(
         symbol,
@@ -224,7 +260,6 @@ def _download_yf(symbol: str, start: Any, asof_date: Any) -> pd.DataFrame:
 
     df = _normalize_columns(df, symbol=symbol)
 
-    # 统一索引为无时区日期
     if isinstance(df.index, pd.DatetimeIndex):
         idx = df.index
         if idx.tz is not None:
@@ -261,5 +296,6 @@ def fetch_fx_usdcny(asof_date: Any = None) -> float:
             continue
 
     raise RuntimeError("yfinance 没找到 USD/CNY 汇率数据（USDCNY=X / CNY=X）")
+
 
 
