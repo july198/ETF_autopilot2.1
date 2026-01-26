@@ -12,37 +12,32 @@ from exchange_calendars.errors import DateOutOfBounds
 def _to_session_ts(x: Any, tz: str = "America/New_York") -> pd.Timestamp:
     """
     把各种输入（None/空字符串/“暂定”/日期字符串/date/datetime/Timestamp）
-    统一转换成交易日历可识别的 Timestamp。
-    遇到无效值时，自动回退为“今天（纽约时区）0点”。
+    统一转换成 Timestamp。
+    注意：这里先按 tz 规范化，最终传给 exchange_calendars 前会去掉时区。
     """
-    # 兜底：今天
     def _today() -> pd.Timestamp:
+        # 先用带 tz 的“今天”，后面 is_trading_day 会统一去掉 tz
         return pd.Timestamp.now(tz=tz).normalize()
 
     if x is None:
         return _today()
 
-    # pandas Timestamp
     if isinstance(x, pd.Timestamp):
         if x.tzinfo is None:
             return x.tz_localize(tz).normalize()
         return x.tz_convert(tz).normalize()
 
-    # datetime
     if isinstance(x, datetime):
         ts = pd.Timestamp(x)
         if ts.tzinfo is None:
             return ts.tz_localize(tz).normalize()
         return ts.tz_convert(tz).normalize()
 
-    # date
     if isinstance(x, date):
         return pd.Timestamp(x).tz_localize(tz).normalize()
 
-    # str
     if isinstance(x, str):
         s = x.strip()
-        # 这些值都当成“自动=今天”
         if s in ("", "auto", "AUTO", "today", "TODAY", "暂定", "TBD", "tbd"):
             return _today()
         try:
@@ -53,7 +48,6 @@ def _to_session_ts(x: Any, tz: str = "America/New_York") -> pd.Timestamp:
         except Exception:
             return _today()
 
-    # 其他类型：一律兜底
     return _today()
 
 
@@ -66,11 +60,18 @@ class CalendarUtil:
         self.cal = ecals.get_calendar(self.cal_name)
 
     def is_trading_day(self, when: Any = None) -> bool:
+        """
+        exchange_calendars 的 is_session 需要“无时区”的 Timestamp。
+        我们先把输入归一化，再去掉 tz 再调用 is_session。
+        """
         ts = _to_session_ts(when, tz=self.tz)
+        ts_naive = ts.tz_localize(None)  # 关键：去掉时区信息
+
         try:
-            return bool(self.cal.is_session(ts))
+            return bool(self.cal.is_session(ts_naive))
         except DateOutOfBounds:
-            # 日期超出日历库范围时，返回 False，避免脚本直接崩
             return False
+
+
 # 兼容旧代码：runner.py 里使用 TradingCalendar 这个名字
 TradingCalendar = CalendarUtil
