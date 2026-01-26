@@ -72,3 +72,5 @@ class CalendarUtil:
         except DateOutOfBounds:
             # 日期超出日历库范围时，返回 False，避免脚本直接崩
             return False
+# 兼容旧代码：runner.py 里使用 TradingCalendar 这个名字
+TradingCalendar = CalendarUtil
