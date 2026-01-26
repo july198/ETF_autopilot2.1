@@ -1,8 +1,7 @@
 name: ETF Auto Trader
 
-# 允许手动触发工作流
 on:
-  workflow_dispatch:  # 手动触发工作流
+  workflow_dispatch:  # 允许手动触发工作流
   schedule:
     - cron: "0 1 * * 2-6"  # 每周二到周六，UTC 01:00，转换为北京时间 09:00
 
@@ -26,7 +25,7 @@ jobs:
         run: |
           pip install -r requirements.txt  # 安装依赖
 
-      # 步骤 4: 运行脚本
+      # 步骤 4: 运行交易脚本
       - name: Run daily trader script
         run: |
-          python scripts/run_daily.py  # 运行你的交易脚本
+          python scripts/run_daily.py  # 确保路径指向正确的脚本文件
