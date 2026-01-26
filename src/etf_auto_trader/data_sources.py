@@ -48,14 +48,13 @@ class MarketData:
         """
         return self.df["Close"].shift(1)
 
-    @property
+       @property
     def MA200(self):
         """
         计算并返回200日移动平均线
         """
         return self.df["Close"].rolling(window=200).mean()
-
-
+        
 def _today() -> pd.Timestamp:
     return pd.Timestamp.today().normalize()
 
