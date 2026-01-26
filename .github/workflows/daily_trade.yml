@@ -10,10 +10,10 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      TZ: Asia/Shanghai
-      SMTP_USER: ${{ secrets.SMTP_USER }}
-      SMTP_PASS: ${{ secrets.SMTP_PASS }}
-      SMTP_TO:   ${{ secrets.SMTP_TO }}
+  TZ: Asia/Shanghai
+  SMTP_USER: ${{ secrets.SMTP_USER }}
+  SMTP_PASS: ${{ secrets.SMTP_PASSWORD }}
+  SMTP_TO:   ${{ secrets.TO_EMAIL }}
 
     steps:
       - name: Checkout code
