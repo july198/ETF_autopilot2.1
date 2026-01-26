@@ -10,7 +10,7 @@ class MarketData:
     """
     兼容旧代码：允许用 md.close / md.open / md.high / md.low / md.volume
     兼容列名：Close/Adj Close/Open/High/Low/Volume 及一些中文列名
-    兼容 runner.py 里可能出现的：md.prev_close、md.MA200 / md.ma200
+    兼容 runner.py 里可能出现的：md.prev_close、md.MA200 / md.ma200、md.month_high_close
     """
 
     def __init__(self, df: pd.DataFrame):
@@ -57,6 +57,35 @@ class MarketData:
     def ma200(self) -> pd.Series:
         # 兼容 runner.py 若使用小写
         return self.MA200
+
+    @property
+    def month_high_close(self) -> float:
+        """
+        返回“最近一根K线所在月份”的月内最高收盘价（float）。
+        例：如果最新数据日期是 2026-01-25，则取 2026-01 全月内 Close 的最大值。
+        """
+        if self.df is None or self.df.empty:
+            return float("nan")
+
+        idx = self.df.index
+        if not isinstance(idx, pd.DatetimeIndex) or idx.size == 0:
+            return float("nan")
+
+        last_dt = idx.max()
+        if pd.isna(last_dt):
+            return float("nan")
+
+        closes = self.close
+        mask = (idx.year == last_dt.year) & (idx.month == last_dt.month)
+        month_closes = closes.loc[mask]
+        if month_closes.empty:
+            return float("nan")
+
+        v = month_closes.max()
+        try:
+            return float(v)
+        except Exception:
+            return float("nan")
 
 
 def _today() -> pd.Timestamp:
@@ -232,4 +261,5 @@ def fetch_fx_usdcny(asof_date: Any = None) -> float:
             continue
 
     raise RuntimeError("yfinance 没找到 USD/CNY 汇率数据（USDCNY=X / CNY=X）")
+
 
