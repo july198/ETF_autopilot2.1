@@ -75,7 +75,7 @@ def _build_email_body(
     buy_usd_est = buy_cny / fx_rate if fx_rate else 0.0
 
     # RSP 关键数据
-    below = "是" if bool(getattr(sig, "below_ma200", False)) else "否"
+    below = "是" if bool(getattr(sig, "below_MA200", False)) else "否"
     third_friday = "是" if bool(getattr(sig, "third_friday", False)) else "否"
     cooldown_ok = "是" if bool(getattr(sig, "cooldown_ok", False)) else "否"
 
