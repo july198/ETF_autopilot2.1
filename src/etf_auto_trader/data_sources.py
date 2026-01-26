@@ -153,3 +153,6 @@ def fetch_fx_usdcny(asof_date: Any = None) -> float:
             continue
 
     raise RuntimeError("yfinance 没找到 USD/CNY 汇率数据（USDCNY=X / CNY=X）")
+# 兼容旧代码：runner.py 里导入的是 fetch_prices
+def fetch_prices(symbol: str, start: Any, asof_date: Any) -> pd.DataFrame:
+    return fetch_price_history(symbol=symbol, start=start, asof_date=asof_date)
