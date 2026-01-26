@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+.env
+.DS_Store
+
+# Local config/state
+config.yaml
+data/*.json
+data/*.csv
+!data/holdings.csv
+!data/holdings.example.csv
+!data/trade_log.example.csv
