@@ -1,7 +1,0 @@
-pandas>=2.1
-numpy>=1.26
-PyYAML>=6.0
-exchange-calendars>=4.5
-yfinance>=0.2.30
-requests>=2.31
-alpaca-py>=0.20.5
