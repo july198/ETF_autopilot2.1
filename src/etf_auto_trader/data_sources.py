@@ -41,6 +41,13 @@ class MarketData:
     def volume(self):
         return self._pick_col("Volume", "成交量", "量")
 
+    @property
+    def prev_close(self):
+        """
+        返回前一个交易日的收盘价
+        """
+        return self.df["Close"].shift(1)
+
 
 def _today() -> pd.Timestamp:
     return pd.Timestamp.today().normalize()
@@ -109,7 +116,7 @@ def _normalize_columns(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
     """
     把 yfinance 返回的列名尽量统一为：
     Open / High / Low / Close / Adj Close / Volume
-    并剥掉类似 “Close Rsp / Adj Close Rsp” 的 ticker 后缀。
+    并剥掉类似 “Close Rsp” 的 ticker 后缀。
     """
     sym = str(symbol).strip()
     sym_upper = sym.upper()
@@ -227,3 +234,4 @@ def fetch_fx_usdcny(asof_date: Any = None) -> float:
             continue
 
     raise RuntimeError("yfinance 没找到 USD/CNY 汇率数据（USDCNY=X / CNY=X）")
+
