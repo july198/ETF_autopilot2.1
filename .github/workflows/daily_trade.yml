@@ -3,10 +3,8 @@ name: ETF Auto Trader
 on:
   workflow_dispatch:
   schedule:
-    # 北京时间 08:50（UTC 00:50）周一到周五
-    - cron: "50 0 * * 1-5"
-    # 北京时间 09:10（UTC 01:10）周一到周五（保险）
-    - cron: "10 1 * * 1-5"
+    - cron: "50 0 * * 1-5"  # 北京时间 08:50（UTC 00:50）
+    - cron: "10 1 * * 1-5"  # 北京时间 09:10（UTC 01:10）保险
 
 jobs:
   run_daily:
@@ -32,9 +30,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # 用 cache 做“今日已发”标记（不需要改仓库文件，不会产生提交）
       - name: Restore sent-flag cache
-        id: sentflag
         uses: actions/cache@v4
         with:
           path: .sent-flag
@@ -42,17 +38,12 @@ jobs:
           restore-keys: |
             sent-flag-${{ github.repository }}-${{ runner.os }}-${{ github.ref_name }}-
 
+      # ✅ 用 shell 直接取北京时间日期，避免 heredoc 语法坑
       - name: Compute today key (Beijing)
         id: today
         run: |
-          python - <<'PY'
-          from datetime import datetime
-          import os
-          # 以北京时间日期作为“今天”
-          now = datetime.now()
-          # runner 环境已设 TZ=Asia/Shanghai，datetime.now() 就是北京时间
-          print("TODAY=" + now.strftime("%Y-%m-%d"))
-          PY >> $GITHUB_OUTPUT
+          echo "TODAY=$(date +%F)" >> $GITHUB_OUTPUT
+          echo "Beijing TODAY=$(date +%F) NOW=$(date '+%F %T %z')"
 
       - name: Check email env (length only)
         run: |
@@ -67,7 +58,6 @@ jobs:
         run: |
           python ./scripts/run_daily.py
 
-      # 判断今天是否已经发过
       - name: Check already sent today
         id: checksent
         run: |
@@ -82,7 +72,6 @@ jobs:
             echo "Not sent yet today: ${TODAY}"
           fi
 
-      # 只有今天没发过才发（避免两封）
       - name: Send email fallback via QQ SMTP (465/587 retry)
         if: steps.checksent.outputs.ALREADY_SENT != '1'
         run: |
@@ -97,7 +86,6 @@ jobs:
           if not user or not pwd or not to:
               raise SystemExit("SMTP env missing: check secrets mapping")
 
-          # 读取最新 summary
           summary = ""
           candidates = sorted(
               glob.glob("data/summary_*.json") + glob.glob("**/data/summary_*.json", recursive=True),
@@ -158,7 +146,6 @@ jobs:
           raise RuntimeError(f"SMTP send failed after retries: {type(last_err).__name__}: {last_err}")
           PY
 
-      # 发完后写入“今日已发”标记
       - name: Mark sent today
         if: steps.checksent.outputs.ALREADY_SENT != '1'
         run: |
@@ -167,7 +154,6 @@ jobs:
           echo "ok" > ".sent-flag/${TODAY}.ok"
           echo "Marked sent: ${TODAY}"
 
-      # 保存 cache（供 09:10 那次读取）
       - name: Save sent-flag cache
         if: steps.checksent.outputs.ALREADY_SENT != '1'
         uses: actions/cache/save@v4
