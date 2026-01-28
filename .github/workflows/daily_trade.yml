@@ -3,9 +3,9 @@ name: ETF Auto Trader
 on:
   workflow_dispatch:
   schedule:
-    # 北京时间 08:50（UTC 00:50）周一到周五：主触发
+    # 北京时间 08:50（UTC 00:50）周一到周五
     - cron: "50 0 * * 1-5"
-    # 北京时间 09:10（UTC 01:10）周一到周五：保险触发（仅在 08:50 没跑成功时补救）
+    # 北京时间 09:10（UTC 01:10）周一到周五（保险）
     - cron: "10 1 * * 1-5"
 
 jobs:
@@ -14,7 +14,7 @@ jobs:
 
     env:
       TZ: Asia/Shanghai
-      # 让脚本读到它期望的环境变量名
+      # 脚本读取的环境变量名（不改你的 secrets 名称）
       SMTP_USER: ${{ secrets.SMTP_USER }}
       SMTP_PASS: ${{ secrets.SMTP_PASSWORD }}
       SMTP_TO: ${{ secrets.TO_EMAIL }}
@@ -33,38 +33,58 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # 恢复“今日已跑”标记（跨两次 schedule）
-      - name: Restore sent-flag cache
-        uses: actions/cache@v4
-        with:
-          path: .sent-flag
-          key: sent-flag-${{ github.repository }}-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}
-          restore-keys: |
-            sent-flag-${{ github.repository }}-${{ runner.os }}-${{ github.ref_name }}-
-
+      # 用北京时间日期作为 key
       - name: Compute today key (Beijing)
         id: today
         run: |
           echo "TODAY=$(date +%F)" >> $GITHUB_OUTPUT
           echo "Beijing TODAY=$(date +%F) NOW=$(date '+%F %T %z')"
 
-      # 检查今天是否已经跑过；跑过则后续全部跳过（避免 09:10 再发一封）
-      - name: Check already ran today
-        id: already
+      # 以“日期”为 key 的 cache：命中就表示今天已发过
+      - name: Restore sent-flag cache (today)
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: .sent-flag
+          key: sent-flag-${{ github.repository }}-${{ github.ref_name }}-${{ steps.today.outputs.TODAY }}
+
+      - name: Check already sent today
+        id: checksent
         run: |
-          set -e
           mkdir -p .sent-flag
           TODAY="${{ steps.today.outputs.TODAY }}"
-          if [ -f ".sent-flag/${TODAY}.ok" ]; then
-            echo "ALREADY_RAN=1" >> $GITHUB_OUTPUT
-            echo "Already ran today: ${TODAY}"
-          else
-            echo "ALREADY_RAN=0" >> $GITHUB_OUTPUT
-            echo "Not ran yet today: ${TODAY}"
+          # 手动触发时允许你主动再发（不受今日标记限制）
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "ALREADY_SENT=0" >> $GITHUB_OUTPUT
+            echo "Manual run: allow sending."
+            exit 0
           fi
 
+          if [ -f ".sent-flag/${TODAY}.ok" ]; then
+            echo "ALREADY_SENT=1" >> $GITHUB_OUTPUT
+            echo "Already sent today: ${TODAY}"
+          else
+            echo "ALREADY_SENT=0" >> $GITHUB_OUTPUT
+            echo "Not sent yet today: ${TODAY}"
+          fi
+
+      # 如果今天已发过：临时把 config.yaml 的 email.enabled 关掉，避免第二封
+      - name: Disable email in config.yaml (if already sent)
+        if: steps.checksent.outputs.ALREADY_SENT == '1'
+        run: |
+          python - <<'PY'
+          import yaml
+          p = "config.yaml"
+          with open(p, "r", encoding="utf-8") as f:
+              cfg = yaml.safe_load(f)
+          # notify.email.enabled = false
+          cfg.setdefault("notify", {}).setdefault("email", {})["enabled"] = False
+          with open(p, "w", encoding="utf-8") as f:
+              yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=False)
+          print("Disabled notify.email.enabled for this run.")
+          PY
+
       - name: Check email env (length only)
-        if: steps.already.outputs.ALREADY_RAN != '1'
         run: |
           python - <<'PY'
           import os
@@ -73,25 +93,16 @@ jobs:
               print(f"{k}: {'OK' if v else 'MISSING'} len={len(v)}")
           PY
 
-      # 只跑一次脚本（脚本会自己发“日报格式”那封邮件）
+      # 运行脚本（脚本会发你想要的那封“日报格式”邮件）
       - name: Run daily trader script
-        if: steps.already.outputs.ALREADY_RAN != '1'
         run: |
           python ./scripts/run_daily.py
 
-      # 标记今日已跑（这样 09:10 会自动跳过，避免第二封邮件）
-      - name: Mark ran today
-        if: steps.already.outputs.ALREADY_RAN != '1'
+      # 如果今天没发过：写标记文件，cache 会在 job 结束时自动保存
+      - name: Mark sent today
+        if: steps.checksent.outputs.ALREADY_SENT != '1'
         run: |
           TODAY="${{ steps.today.outputs.TODAY }}"
           mkdir -p .sent-flag
           echo "ok" > ".sent-flag/${TODAY}.ok"
-          echo "Marked ran: ${TODAY}"
-
-      # 保存标记到 cache，供 09:10 读取
-      - name: Save sent-flag cache
-        if: steps.already.outputs.ALREADY_RAN != '1'
-        uses: actions/cache/save@v4
-        with:
-          path: .sent-flag
-          key: sent-flag-${{ github.repository }}-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}
+          echo "Marked sent: ${TODAY}"
