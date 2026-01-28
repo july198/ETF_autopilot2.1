@@ -38,7 +38,6 @@ jobs:
           restore-keys: |
             sent-flag-${{ github.repository }}-${{ runner.os }}-${{ github.ref_name }}-
 
-      # ✅ 用 shell 直接取北京时间日期，避免 heredoc 语法坑
       - name: Compute today key (Beijing)
         id: today
         run: |
@@ -76,7 +75,7 @@ jobs:
         if: steps.checksent.outputs.ALREADY_SENT != '1'
         run: |
           python - <<'PY'
-          import os, glob, json, ssl, smtplib, time
+          import os, glob, json, ssl, smtplib, time, sys
           from email.mime.text import MIMEText
 
           user = os.getenv("SMTP_USER","").strip()
@@ -86,6 +85,7 @@ jobs:
           if not user or not pwd or not to:
               raise SystemExit("SMTP env missing: check secrets mapping")
 
+          # 读取最新 summary
           summary = ""
           candidates = sorted(
               glob.glob("data/summary_*.json") + glob.glob("**/data/summary_*.json", recursive=True),
@@ -131,14 +131,17 @@ jobs:
                   try:
                       send_via_465()
                       print("Email sent via 465 SSL.")
-                      return
+                      sys.exit(0)
                   except Exception as e1:
                       print(f"[Attempt {attempt}] 465 failed: {type(e1).__name__}: {e1}")
                       last_err = e1
 
                   send_via_587()
                   print("Email sent via 587 STARTTLS.")
-                  return
+                  sys.exit(0)
+
+              except SystemExit:
+                  raise
               except Exception as e:
                   last_err = e
                   time.sleep(5 * attempt)
