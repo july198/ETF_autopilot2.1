@@ -3,8 +3,10 @@ name: ETF Auto Trader
 on:
   workflow_dispatch:
   schedule:
-    # 北京时间 09:00（UTC 01:00）周一到周五
-    - cron: "0 1 * * 1-5"
+    # 北京时间 08:50（UTC 00:50）周一到周五
+    - cron: "50 0 * * 1-5"
+    # 北京时间 09:10（UTC 01:10）周一到周五（保险）
+    - cron: "10 1 * * 1-5"
 
 jobs:
   run_daily:
@@ -30,7 +32,28 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # 只打印长度，不泄露内容
+      # 用 cache 做“今日已发”标记（不需要改仓库文件，不会产生提交）
+      - name: Restore sent-flag cache
+        id: sentflag
+        uses: actions/cache@v4
+        with:
+          path: .sent-flag
+          key: sent-flag-${{ github.repository }}-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            sent-flag-${{ github.repository }}-${{ runner.os }}-${{ github.ref_name }}-
+
+      - name: Compute today key (Beijing)
+        id: today
+        run: |
+          python - <<'PY'
+          from datetime import datetime
+          import os
+          # 以北京时间日期作为“今天”
+          now = datetime.now()
+          # runner 环境已设 TZ=Asia/Shanghai，datetime.now() 就是北京时间
+          print("TODAY=" + now.strftime("%Y-%m-%d"))
+          PY >> $GITHUB_OUTPUT
+
       - name: Check email env (length only)
         run: |
           python - <<'PY'
@@ -40,80 +63,114 @@ jobs:
               print(f"{k}: {'OK' if v else 'MISSING'} len={len(v)}")
           PY
 
-      # 运行主脚本：失败就重试（最多3次）
-      - name: Run daily trader script (retry)
-        uses: nick-fields/retry@v3
+      - name: Run daily trader script
+        run: |
+          python ./scripts/run_daily.py
+
+      # 判断今天是否已经发过
+      - name: Check already sent today
+        id: checksent
+        run: |
+          set -e
+          mkdir -p .sent-flag
+          TODAY="${{ steps.today.outputs.TODAY }}"
+          if [ -f ".sent-flag/${TODAY}.ok" ]; then
+            echo "ALREADY_SENT=1" >> $GITHUB_OUTPUT
+            echo "Already sent today: ${TODAY}"
+          else
+            echo "ALREADY_SENT=0" >> $GITHUB_OUTPUT
+            echo "Not sent yet today: ${TODAY}"
+          fi
+
+      # 只有今天没发过才发（避免两封）
+      - name: Send email fallback via QQ SMTP (465/587 retry)
+        if: steps.checksent.outputs.ALREADY_SENT != '1'
+        run: |
+          python - <<'PY'
+          import os, glob, json, ssl, smtplib, time
+          from email.mime.text import MIMEText
+
+          user = os.getenv("SMTP_USER","").strip()
+          pwd  = os.getenv("SMTP_PASS","").strip()
+          to   = os.getenv("SMTP_TO","").strip()
+
+          if not user or not pwd or not to:
+              raise SystemExit("SMTP env missing: check secrets mapping")
+
+          # 读取最新 summary
+          summary = ""
+          candidates = sorted(
+              glob.glob("data/summary_*.json") + glob.glob("**/data/summary_*.json", recursive=True),
+              key=lambda p: os.path.getmtime(p),
+              reverse=True
+          )
+          if candidates:
+              p = candidates[0]
+              try:
+                  with open(p, "r", encoding="utf-8") as f:
+                      summary_json = json.load(f)
+                  summary = json.dumps(summary_json, ensure_ascii=False, indent=2)
+              except Exception as e:
+                  summary = f"Found {p} but failed to read: {e}"
+          else:
+              summary = "No summary file found. This is a SMTP test mail."
+
+          msg = MIMEText("=== Summary ===\n" + summary + "\n", "plain", "utf-8")
+          msg["Subject"] = "ETF 自动交易日报（北京时间）"
+          msg["From"] = user
+          msg["To"] = to
+
+          host = "smtp.qq.com"
+          ctx = ssl.create_default_context()
+
+          def send_via_465():
+              with smtplib.SMTP_SSL(host, 465, context=ctx, timeout=30) as s:
+                  s.ehlo()
+                  s.login(user, pwd)
+                  s.sendmail(user, [to], msg.as_string())
+
+          def send_via_587():
+              with smtplib.SMTP(host, 587, timeout=30) as s:
+                  s.ehlo()
+                  s.starttls(context=ctx)
+                  s.ehlo()
+                  s.login(user, pwd)
+                  s.sendmail(user, [to], msg.as_string())
+
+          last_err = None
+          for attempt in range(1, 4):
+              try:
+                  try:
+                      send_via_465()
+                      print("Email sent via 465 SSL.")
+                      return
+                  except Exception as e1:
+                      print(f"[Attempt {attempt}] 465 failed: {type(e1).__name__}: {e1}")
+                      last_err = e1
+
+                  send_via_587()
+                  print("Email sent via 587 STARTTLS.")
+                  return
+              except Exception as e:
+                  last_err = e
+                  time.sleep(5 * attempt)
+
+          raise RuntimeError(f"SMTP send failed after retries: {type(last_err).__name__}: {last_err}")
+          PY
+
+      # 发完后写入“今日已发”标记
+      - name: Mark sent today
+        if: steps.checksent.outputs.ALREADY_SENT != '1'
+        run: |
+          TODAY="${{ steps.today.outputs.TODAY }}"
+          mkdir -p .sent-flag
+          echo "ok" > ".sent-flag/${TODAY}.ok"
+          echo "Marked sent: ${TODAY}"
+
+      # 保存 cache（供 09:10 那次读取）
+      - name: Save sent-flag cache
+        if: steps.checksent.outputs.ALREADY_SENT != '1'
+        uses: actions/cache/save@v4
         with:
-          timeout_minutes: 15
-          max_attempts: 3
-          retry_wait_seconds: 30
-          command: python ./scripts/run_daily.py
-
-      # 兜底邮件：失败就重试（最多3次）
-      - name: Send email fallback via QQ SMTP (retry + 465/587)
-        uses: nick-fields/retry@v3
-        with:
-          timeout_minutes: 10
-          max_attempts: 3
-          retry_wait_seconds: 30
-          command: |
-            python - <<'PY'
-            import os, glob, json, ssl, smtplib
-            from email.mime.text import MIMEText
-
-            user = os.getenv("SMTP_USER","").strip()
-            pwd  = os.getenv("SMTP_PASS","").strip()
-            to   = os.getenv("SMTP_TO","").strip()
-
-            if not user or not pwd or not to:
-                raise SystemExit("SMTP env missing: check secrets mapping")
-
-            # 读取最新 summary
-            summary = ""
-            candidates = sorted(
-                glob.glob("data/summary_*.json") + glob.glob("**/data/summary_*.json", recursive=True),
-                key=lambda p: os.path.getmtime(p),
-                reverse=True
-            )
-            if candidates:
-                p = candidates[0]
-                try:
-                    with open(p, "r", encoding="utf-8") as f:
-                        summary_json = json.load(f)
-                    summary = json.dumps(summary_json, ensure_ascii=False, indent=2)
-                except Exception as e:
-                    summary = f"Found {p} but failed to read: {e}"
-            else:
-                summary = "No summary file found. This is a SMTP test mail."
-
-            msg = MIMEText("=== Summary ===\n" + summary + "\n", "plain", "utf-8")
-            msg["Subject"] = "ETF Auto Trader Report (GitHub Actions)"
-            msg["From"] = user
-            msg["To"] = to
-
-            host = "smtp.qq.com"
-            ctx = ssl.create_default_context()
-
-            def send_via_465():
-                with smtplib.SMTP_SSL(host, 465, context=ctx, timeout=30) as s:
-                    s.ehlo()
-                    s.login(user, pwd)
-                    s.sendmail(user, [to], msg.as_string())
-
-            def send_via_587():
-                with smtplib.SMTP(host, 587, timeout=30) as s:
-                    s.ehlo()
-                    s.starttls(context=ctx)
-                    s.ehlo()
-                    s.login(user, pwd)
-                    s.sendmail(user, [to], msg.as_string())
-
-            # 先 465，失败再 587（在 retry 包裹下会自动再试）
-            try:
-                send_via_465()
-                print("Email sent via 465 SSL.")
-            except Exception as e1:
-                print(f"465 failed: {type(e1).__name__}: {e1}")
-                send_via_587()
-                print("Email sent via 587 STARTTLS.")
-            PY
+          path: .sent-flag
+          key: sent-flag-${{ github.repository }}-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}
